@@ -1,5 +1,5 @@
 from google.cloud import datastore
-from flask import Flask, request
+from flask import Flask, request, make_response
 import json
 import constants
 
@@ -36,10 +36,17 @@ def get_self_url(entity):
     return f"{request.url_root}{entity.key.kind}/{entity.key.id}"
 
 
-def update_entity(entity, content):
-    entity.update(content)
+def update_entity(entity, content, partial=False):
+    if partial:
+        for key, value in content.items():
+            if key in entity:
+                entity[key] = value
+    else:
+        entity.update(content)
     client.put(entity)
-    entity["id"] = entity.key.id
+    if "id" not in entity:
+        entity["id"] = entity.key.id
+        client.put(entity)
     return entity
 
 
@@ -60,7 +67,11 @@ def index():
 
 @app.route('/books', methods=['POST', 'GET'])
 def books_get_post():
+    if 'application/json' not in request.accept_mimetypes:
+        return error("The server only sends JSON", 406)
     if request.method == 'POST':
+        if request.content_type != 'application/json':
+            return error("The server only accepts JSON", 415)
         content = request.get_json()
         new_book = datastore.entity.Entity(key=client.key(constants.BOOKS))
         if is_missing_attributes(content, ["title", "author", "genre"]):
@@ -70,7 +81,7 @@ def books_get_post():
                                             "author": content["author"],
                                             "genre": content["genre"]})
         new_book["self"] = get_self_url(new_book)
-        return json.dumps(new_book), 201
+        return json.dumps(new_book), 201, {'Content-Type': 'application/json'}
     elif request.method == 'GET':
         q_limit = int(request.args.get('limit', '3'))
         q_offset = int(request.args.get('offset', '0'))
@@ -81,6 +92,77 @@ def books_get_post():
         if next_url:
             output["next"] = next_url
         return json.dumps(output)
+    elif request.method == 'PUT' or request.method == 'DELETE':
+        return error("Method not supported for this route", 405)
+    else:
+        return 'Method not recognized', 400
+
+
+@app.route('/books/<id>', methods=['DELETE', 'GET', 'PATCH', 'PUT'])
+def books_get_delete(id):
+    book, error_msg = get_entity_by_id("BOOKS", int(id))
+    if error_msg:
+        return error(error_msg, 404)
+    if request.method == 'DELETE':
+        client.delete(book)
+        return '', 204
+    elif request.method == 'GET':
+        book["self"] = get_self_url(book)
+        return json.dumps(book)
+    elif request.method == 'PATCH' or request.method == 'PUT':
+        if 'application/json' not in request.accept_mimetypes:
+            return error("The server only sends JSON", 406)
+        if request.content_type != 'application/json':
+            return error("The server only accepts JSON", 415)
+        content = request.get_json()
+        if not content:
+            return error("No attributes provided", 400)
+        partial_update = True if request.method == 'PATCH' else False
+        updated_book = update_entity(book, content, partial=partial_update)
+        updated_book["self"] = get_self_url(updated_book)
+        required_attributes = ["title", "author", "genre"]
+        if request.method == 'PUT' and is_missing_attributes(
+                content, required_attributes):
+            return error("Missing one or more attributes", 400)
+        return json.dumps(updated_book), 200, \
+               {'Content-Type': 'application/json'}
+    else:
+        return 'Method not recognized'
+
+
+@app.route('/reading_lists', methods=['POST', 'GET'])
+def reading_lists_get_post():
+    if 'application/json' not in request.accept_mimetypes:
+        return error("The server only sends JSON", 406)
+    if request.method == 'POST':
+        if request.content_type != 'application/json':
+            return error("The server only accepts JSON", 415)
+        content = request.get_json()
+        new_book = datastore.entity.Entity(key=client.key(
+            constants.READING_LISTS))
+        if is_missing_attributes(content, ["name", "description"]):
+            return error("The request object is missing at least one of "
+                         "the required attributes", 400)
+        new_reading_list = update_entity(new_book,
+                                         {"name": content["name"],
+                                          "description": content["description"],
+                                          "books": []})
+        new_reading_list["self"] = get_self_url(new_reading_list)
+        return json.dumps(new_reading_list), 201, \
+               {'Content-Type': 'application/json'}
+    elif request.method == 'GET':
+        q_limit = int(request.args.get('limit', '3'))
+        q_offset = int(request.args.get('offset', '0'))
+        results, next_url = get_paginated_entities("READING_LISTS",
+                                                   q_limit, q_offset)
+        for reading_list in results:
+            reading_list["self"] = get_self_url(reading_list)
+        output = {"reading_lists": results}
+        if next_url:
+            output["next"] = next_url
+        return json.dumps(output)
+    elif request.method == 'PUT' or request.method == 'DELETE':
+        return error("Method not supported for this route", 405)
     else:
         return 'Method not recognized', 400
 
