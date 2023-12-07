@@ -98,17 +98,17 @@ def books_get_post():
         return 'Method not recognized', 400
 
 
-@app.route('/books/<id>', methods=['DELETE', 'GET', 'PATCH', 'PUT'])
-def books_get_delete(id):
+@app.route('/books/<id>', methods=['GET', 'DELETE', 'PATCH', 'PUT'])
+def books_get_delete_patch_put(id):
     book, error_msg = get_entity_by_id("BOOKS", int(id))
     if error_msg:
         return error(error_msg, 404)
-    if request.method == 'DELETE':
-        client.delete(book)
-        return '', 204
     elif request.method == 'GET':
         book["self"] = get_self_url(book)
         return json.dumps(book)
+    if request.method == 'DELETE':
+        client.delete(book)
+        return '', 204
     elif request.method == 'PATCH' or request.method == 'PUT':
         if 'application/json' not in request.accept_mimetypes:
             return error("The server only sends JSON", 406)
@@ -131,7 +131,7 @@ def books_get_delete(id):
 
 
 @app.route('/reading_lists', methods=['POST', 'GET'])
-def reading_lists_get_post():
+def reading_lists_post_get():
     if 'application/json' not in request.accept_mimetypes:
         return error("The server only sends JSON", 406)
     if request.method == 'POST':
@@ -165,6 +165,39 @@ def reading_lists_get_post():
         return error("Method not supported for this route", 405)
     else:
         return 'Method not recognized', 400
+
+
+@app.route('/reading_lists/<id>', methods=['GET', 'DELETE', 'PATCH', 'PUT'])
+def reading_lists_get_delete_patch_put(id):
+    reading_list, error_msg = get_entity_by_id("READING_LISTS", int(id))
+    if error_msg:
+        return error(error_msg, 404)
+    elif request.method == 'GET':
+        reading_list["self"] = get_self_url(reading_list)
+        return json.dumps(reading_list)
+    elif request.method == 'DELETE':
+        client.delete(reading_list)
+        return '', 204
+    elif request.method == 'PATCH' or request.method == 'PUT':
+        if 'application/json' not in request.accept_mimetypes:
+            return error("The server only sends JSON", 406)
+        if request.content_type != 'application/json':
+            return error("The server only accepts JSON", 415)
+        content = request.get_json()
+        if not content:
+            return error("No attributes provided", 400)
+        partial_update = True if request.method == 'PATCH' else False
+        updated_reading_list = update_entity(reading_list, content,
+                                             partial=partial_update)
+        updated_reading_list["self"] = get_self_url(updated_reading_list)
+        required_attributes = ["name", "description"]
+        if request.method == 'PUT' and is_missing_attributes(
+                content, required_attributes):
+            return error("Missing one or more attributes", 400)
+        return json.dumps(updated_reading_list), 200, \
+               {'Content-Type': 'application/json'}
+    else:
+        return 'Method not recognized'
 
 
 if __name__ == '__main__':
