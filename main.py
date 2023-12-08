@@ -403,5 +403,14 @@ def get_books_in_reading_list(id):
     return json.dumps(books_info), 200
 
 
+@app.route('/users', methods=['GET'])
+def get_users():
+    query = client.query(kind=constants.USERS)
+    results = list(query.fetch())
+    for e in results:
+        e["id"] = e.key.name
+    return json.dumps(results)
+
+
 if __name__ == '__main__':
     app.run(host='127.0.0.1', port=8080, debug=True)
