@@ -133,8 +133,10 @@ def is_missing_attributes(content, required_attributes):
     return False
 
 
-def get_paginated_entities(entity_type, limit, offset):
+def get_paginated_entities(entity_type, limit, offset, user=None):
     query = client.query(kind=getattr(constants, entity_type))
+    if user:
+        query.add_filter('user', '=', user)
     iterator = query.fetch(limit=limit, offset=offset)
     pages = iterator.pages
     results = list(next(pages))
@@ -308,13 +310,18 @@ def reading_lists_post_get():
                                           "user": payload["sub"],
                                           "books": []})
         new_reading_list["self"] = get_self_url(new_reading_list)
-        return json.dumps(new_reading_list), 201, \
-               {'Content-Type': 'application/json'}
+        return json.dumps(new_reading_list), 201, {'Content-Type':
+                                                   'application/json'}
     elif request.method == 'GET':
+        try:
+            payload = verify_jwt(request)
+            user_sub = payload["sub"]
+        except AuthError as e:
+            return error(str(e), e.status_code)
         q_limit = int(request.args.get('limit', '5'))
         q_offset = int(request.args.get('offset', '0'))
         results, next_url = get_paginated_entities("READING_LISTS",
-                                                   q_limit, q_offset)
+                                                   q_limit, q_offset, user_sub)
         for reading_list in results:
             reading_list["self"] = get_self_url(reading_list)
         output = {"reading_lists": results}
