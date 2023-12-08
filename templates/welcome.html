@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}">
+    <title>Welcome</title>
+</head>
+<body>
+    <h1>Welcome</h1>
+    <p>Click the button below to log in or create an account.</p>
+    <form action="/login">
+        <button type="submit">Log in/Register</button>
+    </form>
+</body>
+</html>

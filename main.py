@@ -1,14 +1,129 @@
-from google.cloud import datastore
-from flask import Flask, request, make_response
 import json
+from six.moves.urllib.request import urlopen
+
+from flask import Flask, request, jsonify, redirect, \
+    render_template, session, url_for
+from google.cloud import datastore
+from jose import jwt
 import constants
+from constants import CLIENT_ID, CLIENT_SECRET, ALGORITHMS, DOMAIN
+from authlib.integrations.flask_client import OAuth
+import base64
 
 app = Flask(__name__)
+app.secret_key = "APP_SECRET_KEY"
+
 client = datastore.Client()
+
+oauth = OAuth(app)
+
+auth0 = oauth.register(
+    'auth0',
+    client_id=CLIENT_ID,
+    client_secret=CLIENT_SECRET,
+    api_base_url="https://" + DOMAIN,
+    access_token_url="https://" + DOMAIN + "/oauth/token",
+    authorize_url="https://" + DOMAIN + "/authorize",
+    client_kwargs={
+        'scope': 'openid profile email',
+    },
+    server_metadata_url=f'https://{DOMAIN}'
+                        f'/.well-known/openid-configuration'
+)
+
+# This code is adapted from https://auth0.com/docs/quickstart/backend/
+# python/01-authorization?_ga=2.46956069.349333901.1589042886-466012638.
+# 1589042885#create-the-jwt-validation-decorator
+
+
+class AuthError(Exception):
+    def __init__(self, error, status_code):
+        self.error = error
+        self.status_code = status_code
+
+
+@app.errorhandler(AuthError)
+def handle_auth_error(ex):
+    response = jsonify(ex.error)
+    response.status_code = ex.status_code
+    return response
+
+
+# Verify the JWT in the request's Authorization header
+def verify_jwt(request):
+    if 'Authorization' in request.headers:
+        auth_header = request.headers['Authorization'].split()
+        token = auth_header[1]
+    else:
+        raise AuthError({"code": "no auth header",
+                         "description":
+                             "Authorization header is missing"}, 401)
+
+    jsonurl = urlopen("https://" + DOMAIN + "/.well-known/jwks.json")
+    jwks = json.loads(jsonurl.read())
+    try:
+        unverified_header = jwt.get_unverified_header(token)
+    except jwt.JWTError:
+        raise AuthError({"code": "invalid_header",
+                         "description":
+                             "Invalid header. "
+                             "Use an RS256 signed JWT Access Token"}, 401)
+    if unverified_header["alg"] == "HS256":
+        raise AuthError({"code": "invalid_header",
+                         "description":
+                             "Invalid header. "
+                             "Use an RS256 signed JWT Access Token"}, 401)
+    rsa_key = {}
+    for key in jwks["keys"]:
+        if key["kid"] == unverified_header["kid"]:
+            rsa_key = {
+                "kty": key["kty"],
+                "kid": key["kid"],
+                "use": key["use"],
+                "n": key["n"],
+                "e": key["e"]
+            }
+    if rsa_key:
+        try:
+            payload = jwt.decode(
+                token,
+                rsa_key,
+                algorithms=ALGORITHMS,
+                audience=CLIENT_ID,
+                issuer="https://" + DOMAIN + "/"
+            )
+        except jwt.ExpiredSignatureError:
+            raise AuthError({"code": "token_expired",
+                             "description": "token is expired"}, 401)
+        except jwt.JWTClaimsError:
+            raise AuthError({"code": "invalid_claims",
+                             "description":
+                                 "incorrect claims,"
+                                 " please check the audience and issuer"}, 401)
+        except Exception:
+            raise AuthError({"code": "invalid_header",
+                             "description":
+                                 "Unable to parse authentication"
+                                 " token."}, 401)
+
+        return payload
+    else:
+        raise AuthError({"code": "no_rsa_key",
+                         "description":
+                             "No RSA key in JWKS"}, 401)
 
 
 def error(err_string, err_code):
     return json.dumps({"Error": err_string}), err_code
+
+
+def get_sub_from_jwt(jwt):
+    parts = jwt.split('.')
+    if len(parts) != 3:
+        return error("Invalid JWT", 401)
+    payload_str = base64.urlsafe_b64decode(parts[1] + '==').decode('utf-8')
+    payload_dict = json.loads(payload_str)
+    return payload_dict.get('sub', '')
 
 
 def is_missing_attributes(content, required_attributes):
@@ -62,7 +177,44 @@ def get_entity_by_id(entity_type, id):
 
 @app.route('/')
 def index():
-    return "Please navigate to /books or /reading_lists to use this API"
+    return render_template('welcome.html')
+
+
+@app.route('/login')
+def login():
+    return auth0.authorize_redirect(
+        redirect_uri=url_for('callback', _external=True)
+    )
+
+
+@app.route('/callback', methods=['GET', 'POST'])
+def callback():
+    token = oauth.auth0.authorize_access_token()
+    session["user"] = token
+    resp = oauth.auth0.get('userinfo')
+    userinfo = resp.json()
+    session['jwt_payload'] = userinfo
+    encoded_jwt = token.get('id_token')
+    if encoded_jwt:
+        user_sub = get_sub_from_jwt(encoded_jwt)
+        user_key = client.key(constants.USERS, user_sub)
+        user = client.get(user_key)
+        if not user:
+            new_user = datastore.Entity(key=user_key)
+            new_user.update({
+                'id': user_sub
+            })
+            client.put(new_user)
+    return redirect('/user-info')
+
+
+@app.route('/user-info')
+def user_info():
+    encoded_jwt = session.get('user').get('id_token')
+    if not encoded_jwt:
+        return error("No JWT found", 401)
+    user_id = get_sub_from_jwt(encoded_jwt)
+    return render_template('user_info.html', jwt=encoded_jwt, user_id=user_id)
 
 
 @app.route('/books', methods=['POST', 'GET'])
@@ -103,10 +255,10 @@ def books_get_delete_patch_put(id):
     book, error_msg = get_entity_by_id("BOOKS", int(id))
     if error_msg:
         return error(error_msg, 404)
-    elif request.method == 'GET':
+    if request.method == 'GET':
         book["self"] = get_self_url(book)
         return json.dumps(book)
-    if request.method == 'DELETE':
+    elif request.method == 'DELETE':
         query = client.query(kind='reading_lists')
         reading_lists = list(query.fetch())
         for reading_list in reading_lists:
@@ -143,6 +295,7 @@ def reading_lists_post_get():
     if request.method == 'POST':
         if request.content_type != 'application/json':
             return error("The server only accepts JSON", 415)
+        payload = verify_jwt(request)
         content = request.get_json()
         new_book = datastore.entity.Entity(key=client.key(
             constants.READING_LISTS))
@@ -152,6 +305,7 @@ def reading_lists_post_get():
         new_reading_list = update_entity(new_book,
                                          {"name": content["name"],
                                           "description": content["description"],
+                                          "user": payload["sub"],
                                           "books": []})
         new_reading_list["self"] = get_self_url(new_reading_list)
         return json.dumps(new_reading_list), 201, \
@@ -178,7 +332,7 @@ def reading_lists_get_delete_patch_put(id):
     reading_list, error_msg = get_entity_by_id("READING_LISTS", int(id))
     if error_msg:
         return error(error_msg, 404)
-    elif request.method == 'GET':
+    if request.method == 'GET':
         reading_list["self"] = get_self_url(reading_list)
         return json.dumps(reading_list)
     elif request.method == 'DELETE':

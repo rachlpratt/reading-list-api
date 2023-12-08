@@ -1,0 +1,34 @@
+body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    font-family: Arial, sans-serif;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+h1 {
+    color: #333;
+}
+
+form {
+    margin-top: 15px;
+}
+
+button {
+    background-color: gray;
+    border: none;
+    color: white;
+    padding: 15px 30px;
+    text-align: center;
+    text-decoration: none;
+    display: inline-block;
+    font-size: 16px;
+    margin: 4px 2px;
+}
+
+p {
+    width: 600px;
+    text-align: center;
+    word-wrap: break-word;
+}

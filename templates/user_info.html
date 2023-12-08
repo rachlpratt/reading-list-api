@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}">
+    <title>User Info</title>
+</head>
+<body>
+    <h1>User Info</h1>
+    <h2>JWT:</h2>
+    <p>{{ jwt }}</p>
+    <h2>User ID:</h2>
+    <p>{{ user_id }}</p>
+</body>
+</html>

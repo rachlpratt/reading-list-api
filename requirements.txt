@@ -1,2 +1,9 @@
 Flask==3.0.0
 google-cloud-datastore==2.8.2
+python-jose
+flask-cors
+six
+python-dotenv
+requests
+authlib
+protobuf==4.24.4
