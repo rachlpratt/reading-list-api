@@ -83,7 +83,7 @@ def books_get_post():
         new_book["self"] = get_self_url(new_book)
         return json.dumps(new_book), 201, {'Content-Type': 'application/json'}
     elif request.method == 'GET':
-        q_limit = int(request.args.get('limit', '3'))
+        q_limit = int(request.args.get('limit', '5'))
         q_offset = int(request.args.get('offset', '0'))
         results, next_url = get_paginated_entities("BOOKS", q_limit, q_offset)
         for book in results:
@@ -107,6 +107,12 @@ def books_get_delete_patch_put(id):
         book["self"] = get_self_url(book)
         return json.dumps(book)
     if request.method == 'DELETE':
+        query = client.query(kind='reading_lists')
+        reading_lists = list(query.fetch())
+        for reading_list in reading_lists:
+            if book["id"] in reading_list.get("books", []):
+                reading_list["books"].remove(book["id"])
+                client.put(reading_list)
         client.delete(book)
         return '', 204
     elif request.method == 'PATCH' or request.method == 'PUT':
@@ -151,7 +157,7 @@ def reading_lists_post_get():
         return json.dumps(new_reading_list), 201, \
                {'Content-Type': 'application/json'}
     elif request.method == 'GET':
-        q_limit = int(request.args.get('limit', '3'))
+        q_limit = int(request.args.get('limit', '5'))
         q_offset = int(request.args.get('offset', '0'))
         results, next_url = get_paginated_entities("READING_LISTS",
                                                    q_limit, q_offset)
@@ -194,10 +200,53 @@ def reading_lists_get_delete_patch_put(id):
         if request.method == 'PUT' and is_missing_attributes(
                 content, required_attributes):
             return error("Missing one or more attributes", 400)
-        return json.dumps(updated_reading_list), 200, \
-               {'Content-Type': 'application/json'}
+        return json.dumps(updated_reading_list), 200, {'Content-Type':
+                                                       'application/json'}
     else:
         return 'Method not recognized'
+
+
+@app.route('/reading_lists/<reading_list_id>/books/<book_id>',
+           methods=['PUT', 'DELETE'])
+def books_put_delete(reading_list_id, book_id):
+    reading_list, reading_list_error_msg = get_entity_by_id(
+        "READING_LISTS", int(reading_list_id))
+    book, book_error_msg = get_entity_by_id("BOOKS", int(book_id))
+    if reading_list_error_msg or book_error_msg:
+        return error("The specified reading_list "
+                     "and/or book does not exist", 404)
+    if request.method == 'PUT':
+        if book["id"] not in reading_list.get("books", []):
+            reading_list["books"] = reading_list.get("books", []) + [book["id"]]
+            client.put(reading_list)
+        else:
+            return error("Book already in reading list", 400)
+        return "", 204
+    elif request.method == 'DELETE':
+        if book["id"] not in reading_list.get("books", []):
+            return error("The specified book is not in the reading list", 404)
+        reading_list["books"] = [existing_book for existing_book in
+                                 reading_list.get("books", [])
+                                 if existing_book != book["id"]]
+        client.put(reading_list)
+        return "", 204
+    else:
+        return 'Method not recognized'
+
+
+@app.route('/reading_lists/<id>/books', methods=['GET'])
+def get_books_in_reading_list(id):
+    reading_list, reading_list_error_msg = get_entity_by_id(
+        "READING_LISTS", int(id))
+    if reading_list_error_msg:
+        return error("The specified reading_list does not exist", 404)
+    books_info = []
+    for book_id in reading_list["books"]:
+        book, book_error_msg = get_entity_by_id("BOOKS", book_id)
+        if book_error_msg:
+            return error(book_error_msg, 404)
+        books_info.append(book)
+    return json.dumps(books_info), 200
 
 
 if __name__ == '__main__':
