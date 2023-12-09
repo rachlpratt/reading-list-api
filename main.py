@@ -1,7 +1,7 @@
 import json
 from six.moves.urllib.request import urlopen
 
-from flask import Flask, request, jsonify, redirect, \
+from flask import Flask, request, redirect, \
     render_template, session, url_for
 from google.cloud import datastore
 from jose import jwt
@@ -40,13 +40,6 @@ class AuthError(Exception):
     def __init__(self, error, status_code):
         self.error = error
         self.status_code = status_code
-
-
-@app.errorhandler(AuthError)
-def handle_auth_error(ex):
-    response = jsonify(ex.error)
-    response.status_code = ex.status_code
-    return response
 
 
 # Verify the JWT in the request's Authorization header
@@ -137,6 +130,7 @@ def get_paginated_entities(entity_type, limit, offset, user=None):
     query = client.query(kind=getattr(constants, entity_type))
     if user:
         query.add_filter('user', '=', user)
+    total_count = len(list(query.fetch()))
     iterator = query.fetch(limit=limit, offset=offset)
     pages = iterator.pages
     results = list(next(pages))
@@ -146,7 +140,7 @@ def get_paginated_entities(entity_type, limit, offset, user=None):
         next_url = f"{request.base_url}?limit={limit}&offset={next_offset}"
     for e in results:
         e["id"] = e.key.id
-    return results, next_url
+    return results, next_url, total_count
 
 
 def get_self_url(entity):
@@ -239,17 +233,19 @@ def books_get_post():
     elif request.method == 'GET':
         q_limit = int(request.args.get('limit', '5'))
         q_offset = int(request.args.get('offset', '0'))
-        results, next_url = get_paginated_entities("BOOKS", q_limit, q_offset)
+        results, next_url, total_count = get_paginated_entities(
+            "BOOKS", q_limit, q_offset)
         for book in results:
             book["self"] = get_self_url(book)
-        output = {"books": results}
+        output = {"books": results,
+                  "count": total_count}
         if next_url:
             output["next"] = next_url
         return json.dumps(output)
     elif request.method == 'PUT' or request.method == 'DELETE':
         return error("Method not supported for this route", 405)
     else:
-        return 'Method not recognized', 400
+        return error('Method not recognized', 400)
 
 
 @app.route('/books/<id>', methods=['GET', 'DELETE', 'PATCH', 'PUT'])
@@ -287,7 +283,7 @@ def books_get_delete_patch_put(id):
         return json.dumps(updated_book), 200, \
                {'Content-Type': 'application/json'}
     else:
-        return 'Method not recognized'
+        return error('Method not recognized', 400)
 
 
 @app.route('/reading_lists', methods=['POST', 'GET'])
@@ -297,7 +293,10 @@ def reading_lists_post_get():
     if request.method == 'POST':
         if request.content_type != 'application/json':
             return error("The server only accepts JSON", 415)
-        payload = verify_jwt(request)
+        try:
+            payload = verify_jwt(request)
+        except AuthError:
+            return error("Unauthorized", 401)
         content = request.get_json()
         new_book = datastore.entity.Entity(key=client.key(
             constants.READING_LISTS))
@@ -316,22 +315,23 @@ def reading_lists_post_get():
         try:
             payload = verify_jwt(request)
             user_sub = payload["sub"]
-        except AuthError as e:
-            return error(str(e), e.status_code)
+        except AuthError:
+            return error("Unauthorized", 401)
         q_limit = int(request.args.get('limit', '5'))
         q_offset = int(request.args.get('offset', '0'))
-        results, next_url = get_paginated_entities("READING_LISTS",
-                                                   q_limit, q_offset, user_sub)
+        results, next_url, total_count = get_paginated_entities(
+            "READING_LISTS", q_limit, q_offset, user_sub)
         for reading_list in results:
             reading_list["self"] = get_self_url(reading_list)
-        output = {"reading_lists": results}
+        output = {"reading_lists": results,
+                  "count": total_count}
         if next_url:
             output["next"] = next_url
         return json.dumps(output)
     elif request.method == 'PUT' or request.method == 'DELETE':
         return error("Method not supported for this route", 405)
     else:
-        return 'Method not recognized', 400
+        return error('Method not recognized', 400)
 
 
 @app.route('/reading_lists/<id>', methods=['GET', 'DELETE', 'PATCH', 'PUT'])
@@ -339,6 +339,13 @@ def reading_lists_get_delete_patch_put(id):
     reading_list, error_msg = get_entity_by_id("READING_LISTS", int(id))
     if error_msg:
         return error(error_msg, 404)
+    try:
+        payload = verify_jwt(request)
+        user_sub = payload["sub"]
+    except AuthError:
+        return error("Unauthorized", 401)
+    if reading_list.get('user') != user_sub:
+        return error("Forbidden - Not owner of reading list", 403)
     if request.method == 'GET':
         reading_list["self"] = get_self_url(reading_list)
         return json.dumps(reading_list)
@@ -364,7 +371,7 @@ def reading_lists_get_delete_patch_put(id):
         return json.dumps(updated_reading_list), 200, {'Content-Type':
                                                        'application/json'}
     else:
-        return 'Method not recognized'
+        return error('Method not recognized', 400)
 
 
 @app.route('/reading_lists/<reading_list_id>/books/<book_id>',
@@ -376,6 +383,13 @@ def books_put_delete(reading_list_id, book_id):
     if reading_list_error_msg or book_error_msg:
         return error("The specified reading_list "
                      "and/or book does not exist", 404)
+    try:
+        payload = verify_jwt(request)
+        user_sub = payload["sub"]
+    except AuthError:
+        return error("Unauthorized", 401)
+    if reading_list.get('user') != user_sub:
+        return error("Forbidden - Not owner of reading list", 403)
     if request.method == 'PUT':
         if book["id"] not in reading_list.get("books", []):
             reading_list["books"] = reading_list.get("books", []) + [book["id"]]
@@ -392,7 +406,7 @@ def books_put_delete(reading_list_id, book_id):
         client.put(reading_list)
         return "", 204
     else:
-        return 'Method not recognized'
+        return error('Method not recognized', 400)
 
 
 @app.route('/reading_lists/<id>/books', methods=['GET'])
@@ -401,6 +415,13 @@ def get_books_in_reading_list(id):
         "READING_LISTS", int(id))
     if reading_list_error_msg:
         return error("The specified reading_list does not exist", 404)
+    try:
+        payload = verify_jwt(request)
+        user_sub = payload["sub"]
+    except AuthError:
+        return error("Unauthorized", 401)
+    if reading_list.get('user') != user_sub:
+        return error("Forbidden - Not owner of reading list", 403)
     books_info = []
     for book_id in reading_list["books"]:
         book, book_error_msg = get_entity_by_id("BOOKS", book_id)
