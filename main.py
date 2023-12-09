@@ -221,10 +221,9 @@ def books_get_post():
         if request.content_type != 'application/json':
             return error("The server only accepts JSON", 415)
         content = request.get_json()
-        new_book = datastore.entity.Entity(key=client.key(constants.BOOKS))
+        new_book = datastore.entity.Entity(key=client.key(constants.books))
         if is_missing_attributes(content, ["title", "author", "genre"]):
-            return error("The request object is missing at least one of "
-                         "the required attributes", 400)
+            return error("Missing one or more attributes", 400)
         new_book = update_entity(new_book, {"title": content["title"],
                                             "author": content["author"],
                                             "genre": content["genre"]})
@@ -234,7 +233,7 @@ def books_get_post():
         q_limit = int(request.args.get('limit', '5'))
         q_offset = int(request.args.get('offset', '0'))
         results, next_url, total_count = get_paginated_entities(
-            "BOOKS", q_limit, q_offset)
+            "books", q_limit, q_offset)
         for book in results:
             book["self"] = get_self_url(book)
         output = {"books": results,
@@ -250,7 +249,7 @@ def books_get_post():
 
 @app.route('/books/<id>', methods=['GET', 'DELETE', 'PATCH', 'PUT'])
 def books_get_delete_patch_put(id):
-    book, error_msg = get_entity_by_id("BOOKS", int(id))
+    book, error_msg = get_entity_by_id("books", int(id))
     if error_msg:
         return error(error_msg, 404)
     if request.method == 'GET':
@@ -273,6 +272,9 @@ def books_get_delete_patch_put(id):
         content = request.get_json()
         if not content:
             return error("No attributes provided", 400)
+        if len(content) > 3:
+            return error("Too many attributes provided, "
+                         "must not exceed 3", 400)
         partial_update = True if request.method == 'PATCH' else False
         updated_book = update_entity(book, content, partial=partial_update)
         updated_book["self"] = get_self_url(updated_book)
@@ -280,8 +282,8 @@ def books_get_delete_patch_put(id):
         if request.method == 'PUT' and is_missing_attributes(
                 content, required_attributes):
             return error("Missing one or more attributes", 400)
-        return json.dumps(updated_book), 200, \
-               {'Content-Type': 'application/json'}
+        return json.dumps(updated_book), 200, {'Content-Type':
+                                               'application/json'}
     else:
         return error('Method not recognized', 400)
 
@@ -299,10 +301,9 @@ def reading_lists_post_get():
             return error("Unauthorized", 401)
         content = request.get_json()
         new_book = datastore.entity.Entity(key=client.key(
-            constants.READING_LISTS))
+            constants.reading_lists))
         if is_missing_attributes(content, ["name", "description"]):
-            return error("The request object is missing at least one of "
-                         "the required attributes", 400)
+            return error("Missing one or more attributes", 400)
         new_reading_list = update_entity(new_book,
                                          {"name": content["name"],
                                           "description": content["description"],
@@ -320,7 +321,7 @@ def reading_lists_post_get():
         q_limit = int(request.args.get('limit', '5'))
         q_offset = int(request.args.get('offset', '0'))
         results, next_url, total_count = get_paginated_entities(
-            "READING_LISTS", q_limit, q_offset, user_sub)
+            "reading_lists", q_limit, q_offset, user_sub)
         for reading_list in results:
             reading_list["self"] = get_self_url(reading_list)
         output = {"reading_lists": results,
@@ -336,7 +337,7 @@ def reading_lists_post_get():
 
 @app.route('/reading_lists/<id>', methods=['GET', 'DELETE', 'PATCH', 'PUT'])
 def reading_lists_get_delete_patch_put(id):
-    reading_list, error_msg = get_entity_by_id("READING_LISTS", int(id))
+    reading_list, error_msg = get_entity_by_id("reading_lists", int(id))
     if error_msg:
         return error(error_msg, 404)
     try:
@@ -360,6 +361,9 @@ def reading_lists_get_delete_patch_put(id):
         content = request.get_json()
         if not content:
             return error("No attributes provided", 400)
+        if len(content) > 2:
+            return error("Too many attributes provided, "
+                         "must not exceed 2", 400)
         partial_update = True if request.method == 'PATCH' else False
         updated_reading_list = update_entity(reading_list, content,
                                              partial=partial_update)
@@ -378,8 +382,8 @@ def reading_lists_get_delete_patch_put(id):
            methods=['PUT', 'DELETE'])
 def books_put_delete(reading_list_id, book_id):
     reading_list, reading_list_error_msg = get_entity_by_id(
-        "READING_LISTS", int(reading_list_id))
-    book, book_error_msg = get_entity_by_id("BOOKS", int(book_id))
+        "reading_lists", int(reading_list_id))
+    book, book_error_msg = get_entity_by_id("books", int(book_id))
     if reading_list_error_msg or book_error_msg:
         return error("The specified reading_list "
                      "and/or book does not exist", 404)
@@ -395,7 +399,7 @@ def books_put_delete(reading_list_id, book_id):
             reading_list["books"] = reading_list.get("books", []) + [book["id"]]
             client.put(reading_list)
         else:
-            return error("Book already in reading list", 400)
+            return error("Book already in reading list", 403)
         return "", 204
     elif request.method == 'DELETE':
         if book["id"] not in reading_list.get("books", []):
@@ -411,10 +415,9 @@ def books_put_delete(reading_list_id, book_id):
 
 @app.route('/reading_lists/<id>/books', methods=['GET'])
 def get_books_in_reading_list(id):
-    reading_list, reading_list_error_msg = get_entity_by_id(
-        "READING_LISTS", int(id))
-    if reading_list_error_msg:
-        return error("The specified reading_list does not exist", 404)
+    reading_list, error_msg = get_entity_by_id("reading_lists", int(id))
+    if error_msg:
+        return error(error_msg, 404)
     try:
         payload = verify_jwt(request)
         user_sub = payload["sub"]
@@ -424,9 +427,10 @@ def get_books_in_reading_list(id):
         return error("Forbidden - Not owner of reading list", 403)
     books_info = []
     for book_id in reading_list["books"]:
-        book, book_error_msg = get_entity_by_id("BOOKS", book_id)
+        book, book_error_msg = get_entity_by_id("books", book_id)
         if book_error_msg:
             return error(book_error_msg, 404)
+        book["self"] = get_self_url(book)
         books_info.append(book)
     return json.dumps(books_info), 200
 
